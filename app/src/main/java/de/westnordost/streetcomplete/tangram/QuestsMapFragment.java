@@ -9,14 +9,16 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 
+import com.mapzen.tangram.CameraPosition;
+import com.mapzen.tangram.CameraUpdateFactory;
 import com.mapzen.tangram.LabelPickResult;
 import com.mapzen.tangram.LngLat;
-import com.mapzen.tangram.MapController;
 import com.mapzen.tangram.MapData;
 import com.mapzen.tangram.SceneError;
 import com.mapzen.tangram.SceneUpdate;
 import com.mapzen.tangram.TouchInput;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -37,9 +39,9 @@ import de.westnordost.streetcomplete.quests.bikeway.AddCycleway;
 import de.westnordost.streetcomplete.util.SlippyMapMath;
 import de.westnordost.osmapi.map.data.BoundingBox;
 import de.westnordost.osmapi.map.data.LatLon;
+import de.westnordost.streetcomplete.util.SphericalEarthMath;
 
-public class QuestsMapFragment extends MapFragment implements TouchInput.TapResponder,
-		MapController.LabelPickListener
+public class QuestsMapFragment extends MapFragment
 {
 	private static final String MARKER_QUEST_ID = "quest_id";
 	private static final String MARKER_QUEST_GROUP = "quest_group";
@@ -50,9 +52,9 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 	private MapData questsLayer;
 	private MapData geometryLayer;
 
-	private Float previousZoom = null;
+	private CameraPosition cameraPositionBeforeZoomToGeometry = null;
 
-	private LngLat lastPos;
+	private CameraPosition lastCameraPosition;
 	private Rect lastDisplayedRect;
 	private final Set<Point> retrievedTiles;
 	private static final int TILES_ZOOM = 14;
@@ -112,12 +114,20 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		questsLayer = geometryLayer = null;
 	}
 
-	@Override public void getMapAsync(String apiKey, @NonNull final String sceneFilePath)
+	@Override protected void onMapControllerReady(@NonNull final String sceneFilePath)
 	{
-		super.getMapAsync(apiKey, sceneFilePath);
+		super.onMapControllerReady(sceneFilePath);
 
-		controller.setTapResponder(this);
-		controller.setLabelPickListener(this);
+		controller.getTouchInput().setTapResponder(new TouchInput.TapResponder()
+		{
+			@Override public boolean onSingleTapUp(float x, float y) { return false; }
+			@Override public boolean onSingleTapConfirmed(float x, float y)
+			{
+				if(controller != null) controller.pickLabel(x,y);
+				return true;
+			}
+		});
+		controller.setLabelPickListener(this::onLabelPick);
 		controller.setPickRadius(1);
 	}
 
@@ -129,7 +139,7 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		controller.loadSceneFile(sceneFilePath, sceneUpdates);
 	}
 
-	@Override public void onSceneReady(int sceneId, SceneError sceneError)
+	@Override protected void onSceneReady(int sceneId, SceneError sceneError)
 	{
 		if (getActivity() != null)
 		{
@@ -140,19 +150,7 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		super.onSceneReady(sceneId, sceneError);
 	}
 
-	@Override public boolean onSingleTapUp(float x, float y)
-	{
-		return false;
-	}
-
-	@Override public boolean onSingleTapConfirmed(float x, float y)
-	{
-		if(controller != null) controller.pickLabel(x,y);
-		return true;
-	}
-
-	@Override
-	public void onLabelPick(LabelPickResult labelPickResult, float positionX, float positionY)
+	private void onLabelPick(LabelPickResult labelPickResult, float positionX, float positionY)
 	{
 		if(controller == null) return;
 
@@ -172,73 +170,22 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		);
 	}
 
-	private void zoomAndMoveToContain(ElementGeometry g)
+	private void zoomAndMoveToContain(ElementGeometry geometry)
 	{
-		previousZoom = controller.getZoom();
+		cameraPositionBeforeZoomToGeometry = controller.getCameraPosition();
 
-		float targetZoom = getMaxZoomThatContains(g);
-		if(Float.isNaN(targetZoom) || targetZoom > MAX_QUEST_ZOOM)
-		{
-			targetZoom = MAX_QUEST_ZOOM;
-		}
-		else
-		{
-			// zoom out a bit
-			targetZoom -= 0.4;
-		}
-
-		float currentZoom = controller.getZoom();
-
-		controller.setZoom(targetZoom);
-		LngLat pos = getCenterWithOffset(g);
-		controller.setZoom(currentZoom);
-
-		if(pos != null) controller.setPositionEased(pos, 500);
-		controller.setZoomEased(targetZoom, 500);
-
-		updateView();
-	}
-
-	private LngLat getCenterWithOffset(ElementGeometry geometry)
-	{
-		int w = getView().getWidth();
-		int h = getView().getHeight();
-
-		LngLat normalCenter = controller.screenPositionToLngLat(new PointF(w/2f, h/2f));
-
-		LngLat offsetCenter = controller.screenPositionToLngLat(new PointF(
-				questOffset.left + (w - questOffset.left - questOffset.right)/2,
-				questOffset.top + (h - questOffset.top - questOffset.bottom)/2));
-
-		if(normalCenter == null || offsetCenter == null) return null;
-
-		LngLat pos = TangramConst.toLngLat(geometry.center);
-		pos.latitude -= offsetCenter.latitude - normalCenter.latitude;
-		pos.longitude -= offsetCenter.longitude - normalCenter.longitude;
-		return pos;
-	}
-
-	private float getMaxZoomThatContains(ElementGeometry geometry)
-	{
 		BoundingBox objectBounds = geometry.getBounds();
-		BoundingBox screenArea;
-		float currentZoom;
-		synchronized(controller) {
-			screenArea = getDisplayedArea(questOffset);
-			if(screenArea == null) return Float.NaN;
-			currentZoom = controller.getZoom();
+		LngLat min = TangramConst.toLngLat(objectBounds.getMin());
+		LngLat max = TangramConst.toLngLat(objectBounds.getMax());
+
+		CameraPosition position = controller.getEnclosingCameraPosition(min, max, questOffset);
+
+		if(position.zoom > MAX_QUEST_ZOOM)
+		{
+			position.zoom = MAX_QUEST_ZOOM;
 		}
 
-		double screenWidth = screenArea.getMaxLongitude() - screenArea.getMinLongitude();
-		double screenHeight = screenArea.getMaxLatitude() - screenArea.getMinLatitude();
-
-		double objectWidth = objectBounds.getMaxLongitude() - objectBounds.getMinLongitude();
-		double objectHeight = objectBounds.getMaxLatitude() - objectBounds.getMinLatitude();
-
-		double zoomDeltaX = Math.log10(screenWidth / objectWidth) / Math.log10(2.);
-		double zoomDeltaY = Math.log10(screenHeight / objectHeight) / Math.log10(2.);
-
-		return (float) Math.max(1, currentZoom + Math.min(zoomDeltaX, zoomDeltaY));
+		controller.updateCameraPosition(CameraUpdateFactory.newCameraPosition(position), 500);
 	}
 
 	private void onClickedMap(float positionX, float positionY)
@@ -250,25 +197,27 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 	@Override protected boolean shouldCenterCurrentPosition()
 	{
 		// don't center position while displaying a quest
-		return super.shouldCenterCurrentPosition() && previousZoom == null;
+		return super.shouldCenterCurrentPosition() && cameraPositionBeforeZoomToGeometry == null;
 	}
 
 	protected void updateView()
 	{
 		super.updateView();
 
-		if(controller.getZoom() < TILES_ZOOM) return;
+		CameraPosition cameraPosition = controller.getCameraPosition();
 
-		// check if anything changed (needs to be extended when I reenable tilt and rotation)
-		LngLat positionNow = controller.getPosition();
-		if(lastPos != null  && lastPos.equals(positionNow)) return;
-		lastPos = positionNow;
+		if(cameraPosition.zoom < TILES_ZOOM) return;
 
-		BoundingBox displayedArea = getDisplayedArea(new Rect());
+		// check if camera position changed
+		if(cameraPosition.equals(lastCameraPosition)) return;
+		lastCameraPosition = cameraPosition;
+
+		BoundingBox displayedArea = getDisplayedArea();
 		if(displayedArea == null) return;
 
+		// check if enclosing the same tiles
 		Rect tilesRect = SlippyMapMath.enclosingTiles(displayedArea, TILES_ZOOM);
-		if(lastDisplayedRect != null && lastDisplayedRect.equals(tilesRect)) return;
+		if(tilesRect.equals(lastDisplayedRect)) return;
 		lastDisplayedRect = tilesRect;
 
 		// area to big -> skip ( see https://github.com/tangrams/tangram-es/issues/1492 )
@@ -277,6 +226,7 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 			return;
 		}
 
+		// alright, need to fetch additional tiles from database...
 		List<Point> tiles = SlippyMapMath.asTileList(tilesRect);
 		tiles.removeAll(retrievedTiles);
 
@@ -309,7 +259,6 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		if(geometryLayer == null) return; // might still be null - async calls...
 
 		zoomAndMoveToContain(g);
-		updateView();
 
 		Map<String,String> props = new HashMap<>();
 
@@ -338,11 +287,11 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 	public void removeQuestGeometry()
 	{
 		if(geometryLayer != null) geometryLayer.clear();
-		if(controller != null && previousZoom != null)
+		if(controller != null && cameraPositionBeforeZoomToGeometry != null)
 		{
-			controller.setZoomEased(previousZoom, 500);
-			previousZoom = null;
-			followPosition();
+			controller.updateCameraPosition(CameraUpdateFactory.newCameraPosition(cameraPositionBeforeZoomToGeometry), 500);
+			cameraPositionBeforeZoomToGeometry = null;
+			updateView();
 		}
 	}
 /*
@@ -436,17 +385,15 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 	{
 		if(questsLayer != null) questsLayer.clear();
 		retrievedTiles.clear();
-		lastPos = null;
+		lastCameraPosition = null;
 		lastDisplayedRect = null;
 	}
 
-	public BoundingBox getDisplayedArea(Rect offset)
+	public BoundingBox getDisplayedArea()
 	{
 		if(controller == null) return null;
 		if(getView() == null) return null;
-		Point size = new Point(
-				getView().getWidth() - offset.left - offset.right,
-				getView().getHeight() - offset.top - offset.bottom);
+		Point size = new Point(getView().getWidth(),getView().getHeight());
 		if(size.equals(0,0)) return null;
 
 		// the special cases here are: map tilt and map rotation:
@@ -454,48 +401,25 @@ public class QuestsMapFragment extends MapFragment implements TouchInput.TapResp
 		// * map rotation makes the screen area -> world map area into a rotated rectangle
 
 		// dealing with tilt: this method is just not defined if the tilt is above a certain limit
-		if(controller.getTilt() > Math.PI / 4f) return null; // 45°
+		// otherwise the area would get too big
+		if(controller.getCameraPosition().tilt > Math.PI / 4f) return null; // 45°
 
-		LatLon[] positions = new LatLon[4];
-		positions[0] = getPositionAt(new PointF(offset.left,          offset.top));
-		positions[1] = getPositionAt(new PointF(offset.left + size.x ,offset.top));
-		positions[2] = getPositionAt(new PointF(offset.left,          offset.top + size.y));
-		positions[3] = getPositionAt(new PointF(offset.left + size.x, offset.top + size.y));
+		PointF[] points = {
+			new PointF(0,      0     ),
+			new PointF(size.x, 0     ),
+			new PointF(0,      size.y),
+			new PointF(size.x, size.y)
+		};
 
-		// dealing with rotation: find each the largest latlon and the smallest latlon, that'll
-		// be our bounding box
-
-		Double latMin = null, lonMin = null, latMax = null, lonMax = null;
-		for (LatLon position : positions)
+		List<LatLon> positions = new ArrayList<>(4);
+		synchronized (controller)
 		{
-			if(position == null) return null;
-			double lat = position.getLatitude();
-			double lon = position.getLongitude();
-
-			if (latMin == null || latMin > lat) latMin = lat;
-			if (latMax == null || latMax < lat) latMax = lat;
-			if (lonMin == null || lonMin > lon) lonMin = lon;
-			if (lonMax == null || lonMax < lon) lonMax = lon;
+			for (PointF point : points)
+			{
+				LatLon pos = getPositionAt(point);
+				if (pos != null) positions.add(pos);
+			}
 		}
-
-		return new BoundingBox(latMin, lonMin, latMax, lonMax);
-	}
-
-	public LatLon getPositionAt(PointF pointF)
-	{
-		LngLat pos = controller.screenPositionToLngLat(pointF);
-		if(pos == null) return null;
-		return TangramConst.toLatLon(pos);
-	}
-
-	public LatLon getPosition()
-	{
-		if(controller == null) return null;
-		return TangramConst.toLatLon(controller.getPosition());
-	}
-
-	public PointF getPointOf(LatLon pos)
-	{
-		return controller.lngLatToScreenPosition(TangramConst.toLngLat(pos));
+		return SphericalEarthMath.enclosingBoundingBox(positions);
 	}
 }

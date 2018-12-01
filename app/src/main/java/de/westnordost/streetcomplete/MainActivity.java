@@ -237,7 +237,7 @@ public class MainActivity extends AppCompatActivity implements
 		downloadProgressBar.setMax(1000);
 
 		mapFragment = (QuestsMapFragment) getSupportFragmentManager().findFragmentById(R.id.map_fragment);
-		mapFragment.getMapAsync(BuildConfig.MAPZEN_API_KEY);
+		mapFragment.loadMap(BuildConfig.MAPZEN_API_KEY);
 		updateMapQuestOffsets();
 
 		if(savedInstanceState == null)
@@ -298,10 +298,13 @@ public class MainActivity extends AppCompatActivity implements
 		questAutoSyncer.onPause();
 
 		LatLon pos = mapFragment.getPosition();
-		prefs.edit()
-			.putLong(Prefs.MAP_LATITUDE, Double.doubleToRawLongBits(pos.getLatitude()))
-			.putLong(Prefs.MAP_LONGITUDE, Double.doubleToRawLongBits(pos.getLongitude()))
-			.apply();
+		if(pos != null)
+		{
+			prefs.edit()
+				.putLong(Prefs.MAP_LATITUDE, Double.doubleToRawLongBits(pos.getLatitude()))
+				.putLong(Prefs.MAP_LONGITUDE, Double.doubleToRawLongBits(pos.getLongitude()))
+				.apply();
+		}
 	}
 
 	@Override public void onStop()
@@ -456,7 +459,7 @@ public class MainActivity extends AppCompatActivity implements
 	@UiThread private void downloadDisplayedArea()
 	{
 		BoundingBox displayArea;
-		if ((displayArea = mapFragment.getDisplayedArea(new Rect())) == null)
+		if ((displayArea = mapFragment.getDisplayedArea()) == null)
 		{
 			Toast.makeText(this, R.string.cannot_find_bbox_or_reduce_tilt, Toast.LENGTH_LONG).show();
 		}

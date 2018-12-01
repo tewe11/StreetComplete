@@ -1,53 +1,57 @@
 package de.westnordost.streetcomplete.tangram;
 
-import android.support.annotation.NonNull;
-
-import com.mapzen.tangram.HttpHandler;
+import com.mapzen.tangram.networking.DefaultHttpHandler;
 
 import java.io.File;
-import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 
-import de.westnordost.streetcomplete.ApplicationConstants;
+import okhttp3.Cache;
 import okhttp3.CacheControl;
-import okhttp3.Callback;
 import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.internal.Version;
 
-public class TileHttpHandler extends HttpHandler
+public class TileHttpHandler extends DefaultHttpHandler
 {
 	private final String apiKey;
+	private final String userAgent;
+	private final File cacheDirectory;
+	private final long cacheMaxSize;
 
-	public TileHttpHandler(String apiKey)
+	private final CacheControl tileCacheControl = new CacheControl.Builder().maxStale(7, TimeUnit.DAYS).build();
+
+	public TileHttpHandler(String userAgent, String apiKey)
 	{
-		super();
+		this(userAgent, apiKey, null, 0);
+	}
+
+	public TileHttpHandler(String userAgent, String apiKey, File directory, long maxSize)
+	{
+		this.userAgent = userAgent;
+		this.cacheDirectory = directory;
+		this.cacheMaxSize = maxSize;
 		this.apiKey = apiKey;
 	}
 
-	public TileHttpHandler(String apiKey, File directory, long maxSize)
+	@Override protected void configureClient(OkHttpClient.Builder builder)
 	{
-		super(directory, maxSize);
-		this.apiKey = apiKey;
-	}
-
-	@Override public void onRequest(@NonNull String url, @NonNull Callback cb, long requestHandle)
-	{
-		HttpUrl httpUrl = HttpUrl.parse(url + "?api_key=" + apiKey);
-		if (httpUrl == null) {
-			cb.onFailure(null, new IOException("HttpUrl failed to parse url=" + url));
+		if(cacheDirectory != null)
+		{
+			builder.cache(new Cache(cacheDirectory, cacheMaxSize));
 		}
-		else {
-			Request.Builder builder = new Request.Builder()
-				.url(httpUrl)
-				.tag(requestHandle)
-				.header("User-Agent", ApplicationConstants.USER_AGENT + " / " + Version.userAgent());
+	}
 
-			CacheControl cacheControl = cachePolicy.apply(httpUrl);
-			if (cacheControl != null) {
-				builder.cacheControl(cacheControl);
-			}
-			Request request = builder.build();
-			okClient.newCall(request).enqueue(cb);
+	@Override protected void configureRequest(HttpUrl url, Request.Builder builder)
+	{
+		builder.cacheControl(tileCacheControl);
+		if(apiKey != null)
+		{
+			builder.url(url.newBuilder().addQueryParameter("api_key", apiKey).build());
+		}
+		if(userAgent != null)
+		{
+			builder.header("User-Agent", userAgent + " / " + Version.userAgent());
 		}
 	}
 }

@@ -124,7 +124,7 @@ dependencies {
     implementation 'org.objenesis:objenesis:2.6'
 
     // map and location
-    implementation 'com.mapzen.tangram:tangram:0.9.6'
+    implementation 'com.mapzen.tangram:tangram:0.10.0'
     implementation 'com.mapzen.android:lost:3.0.4'
 
     // config files

@@ -1,6 +1,5 @@
 package de.westnordost.streetcomplete.tangram;
 
-import android.animation.ObjectAnimator;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -295,7 +294,6 @@ public class MapControlsFragment extends Fragment
 			onLocationIsDisabled();
 		}
 	}
-
 
 	private void onLocationIsEnabled()
 	{
