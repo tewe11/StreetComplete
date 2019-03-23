@@ -31,9 +31,16 @@ import de.westnordost.streetcomplete.data.meta.CountryInfo
 import de.westnordost.streetcomplete.data.meta.CountryInfos
 import de.westnordost.streetcomplete.data.osm.ElementGeometry
 import kotlinx.android.synthetic.main.fragment_quest_answer.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlin.coroutines.CoroutineContext
 
 /** Abstract base class for any dialog with which the user answers a specific quest(ion)  */
-abstract class AbstractQuestAnswerFragment<T> : AbstractBottomSheetFragment() {
+abstract class AbstractQuestAnswerFragment<T> : AbstractBottomSheetFragment(), CoroutineScope {
+
+    override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.Main
 
     private val countryInfos: CountryInfos
     private val questTypeRegistry: QuestTypeRegistry
@@ -186,6 +193,11 @@ abstract class AbstractQuestAnswerFragment<T> : AbstractBottomSheetFragment() {
     override fun onAttach(ctx: Context) {
         super.onAttach(ctx)
         questAnswerComponent.onAttach(ctx as OsmQuestAnswerListener)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        coroutineContext.cancel()
     }
 
     /** Note: Due to Android architecture limitations, a layout inflater based on this ContextWrapper

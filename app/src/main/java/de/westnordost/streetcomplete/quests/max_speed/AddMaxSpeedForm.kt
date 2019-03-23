@@ -11,11 +11,14 @@ import android.widget.ImageView
 import android.widget.Spinner
 
 import de.westnordost.streetcomplete.R
+import de.westnordost.streetcomplete.ktx.setResumeButtons
 import de.westnordost.streetcomplete.quests.AbstractQuestFormAnswerFragment
 import de.westnordost.streetcomplete.quests.OtherAnswer
 import de.westnordost.streetcomplete.util.TextChangedWatcher
 import kotlinx.android.synthetic.main.quest_maxspeed.*
+import kotlinx.coroutines.launch
 import java.lang.IllegalStateException
+import kotlin.coroutines.suspendCoroutine
 
 
 class AddMaxSpeedForm : AbstractQuestFormAnswerFragment<MaxSpeedAnswer>() {
@@ -27,7 +30,9 @@ class AddMaxSpeedForm : AbstractQuestFormAnswerFragment<MaxSpeedAnswer>() {
 
         val highwayTag = osmElement!!.tags["highway"]!!
         if (countryInfo.isLivingStreetKnown && MAYBE_LIVING_STREET.contains(highwayTag)) {
-            result.add(OtherAnswer(R.string.quest_maxspeed_answer_living_street) { confirmLivingStreet() })
+            result.add(OtherAnswer(R.string.quest_maxspeed_answer_living_street) { launch {
+                if (confirmIsLivingStreet()) applyAnswer(IsLivingStreet)
+            }})
         }
         if (countryInfo.isAdvisorySpeedLimitKnown) {
             result.add(OtherAnswer(R.string.quest_maxspeed_answer_advisory_speed_limit) { switchToAdvisorySpeedLimit() })
@@ -55,22 +60,17 @@ class AddMaxSpeedForm : AbstractQuestFormAnswerFragment<MaxSpeedAnswer>() {
 
     }
 
-    override fun onClickOk() {
+    override fun onClickOk() { launch {
         if (speedType == SpeedType.NO_SIGN) {
             val couldBeSlowZone = countryInfo.isSlowZoneKnown
                     && POSSIBLY_SLOWZONE_ROADS.contains(osmElement!!.tags["highway"])
 
-            if (couldBeSlowZone)
-                confirmNoSignSlowZone { determineImplicitMaxspeedType() }
-            else
-                confirmNoSign { determineImplicitMaxspeedType() }
+            val noSignConfirmed = if (couldBeSlowZone) confirmNoSignSlowZone() else confirmNoSign()
+            if (noSignConfirmed) applyNoSignAnswer(determineImplicitMaxspeedType())
         } else {
-            if (userSelectedUnusualSpeed())
-                confirmUnusualInput { applySpeedLimitFormAnswer() }
-            else
-                applySpeedLimitFormAnswer()
+            if (!userSelectedUnusualSpeed() || confirmUnusualInput()) applySpeedLimitFormAnswer()
         }
-    }
+    }}
 
     override fun isFormComplete() = speedType != null && (speedInput == null || speed.isNotEmpty())
 
@@ -132,15 +132,14 @@ class AddMaxSpeedForm : AbstractQuestFormAnswerFragment<MaxSpeedAnswer>() {
         setSpeedType(SpeedType.ADVISORY)
     }
 
-    private fun confirmUnusualInput(onConfirmed: () -> Unit) {
-        activity?.let {
-            AlertDialog.Builder(it)
-                .setTitle(R.string.quest_generic_confirmation_title)
-                .setMessage(R.string.quest_maxspeed_unusualInput_confirmation_description)
-                .setPositiveButton(R.string.quest_generic_confirmation_yes) { _, _ -> onConfirmed() }
-                .setNegativeButton(R.string.quest_generic_confirmation_no, null)
-                .show()
-        }
+    private suspend fun confirmUnusualInput(): Boolean = suspendCoroutine { cont ->
+        AlertDialog.Builder(activity!!)
+            .setTitle(R.string.quest_generic_confirmation_title)
+            .setMessage(R.string.quest_maxspeed_unusualInput_confirmation_description)
+            .setResumeButtons(cont,
+                R.string.quest_generic_confirmation_yes,
+                R.string.quest_generic_confirmation_no)
+            .show()
     }
 
     private fun applySpeedLimitFormAnswer() {
@@ -167,109 +166,98 @@ class AddMaxSpeedForm : AbstractQuestFormAnswerFragment<MaxSpeedAnswer>() {
     /* ----------------------------------------- No sign ---------------------------------------- */
 
     // the living street answer stuff is copied to AddAccessibleForPedestriansForm
-    private fun confirmLivingStreet() {
-        activity?.let {
-            val view = layoutInflater.inflate(R.layout.quest_maxspeed_living_street_confirmation, null, false)
-            // this is necessary because the inflated image view uses the activity context rather than
-            // the fragment / layout inflater context' resources to access it's drawable
-            val img = view.findViewById<ImageView>(R.id.livingStreetImage)
-            img.setImageDrawable(resources.getDrawable(R.drawable.ic_living_street))
-            AlertDialog.Builder(it)
-                .setView(view)
-                .setTitle(R.string.quest_maxspeed_answer_living_street_confirmation_title)
-                .setPositiveButton(R.string.quest_generic_confirmation_yes) { _, _ -> applyAnswer(IsLivingStreet) }
-                .setNegativeButton(R.string.quest_generic_confirmation_no, null)
-                .show()
-        }
+    private suspend fun confirmIsLivingStreet(): Boolean = suspendCoroutine { cont ->
+        val view = layoutInflater.inflate(R.layout.quest_maxspeed_living_street_confirmation, null, false)
+        // this is necessary because the inflated image view uses the activity context rather than
+        // the fragment / layout inflater context' resources to access it's drawable
+        val img = view.findViewById<ImageView>(R.id.livingStreetImage)
+        img.setImageDrawable(resources.getDrawable(R.drawable.ic_living_street))
+        AlertDialog.Builder(activity!!)
+            .setView(view)
+            .setTitle(R.string.quest_maxspeed_answer_living_street_confirmation_title)
+            .setResumeButtons(cont,
+                R.string.quest_generic_confirmation_yes,
+                R.string.quest_generic_confirmation_no)
+            .show()
     }
 
-    private fun confirmNoSign(onConfirmed: () -> Unit) {
-        activity?.let {
-            AlertDialog.Builder(it)
-                .setTitle(R.string.quest_maxspeed_answer_noSign_confirmation_title)
-                .setMessage(R.string.quest_maxspeed_answer_noSign_confirmation)
-                .setPositiveButton(R.string.quest_maxspeed_answer_noSign_confirmation_positive) { _, _ -> onConfirmed() }
-                .setNegativeButton(R.string.quest_generic_confirmation_no, null)
-                .show()
-        }
+    private suspend fun confirmNoSign(): Boolean = suspendCoroutine { cont ->
+        AlertDialog.Builder(activity!!)
+            .setTitle(R.string.quest_maxspeed_answer_noSign_confirmation_title)
+            .setMessage(R.string.quest_maxspeed_answer_noSign_confirmation)
+            .setResumeButtons(cont,
+                R.string.quest_maxspeed_answer_noSign_confirmation_positive,
+                R.string.quest_generic_confirmation_no)
+            .show()
     }
 
-    private fun confirmNoSignSlowZone(onConfirmed: () -> Unit) {
-        activity?.let {
-            val view = layoutInflater.inflate(R.layout.quest_maxspeed_no_sign_no_slow_zone_confirmation, null, false)
-            val input = view.findViewById<EditText>(R.id.maxSpeedInput)
-            input.setText("××")
-            input.inputType = EditorInfo.TYPE_NULL
+    private suspend fun confirmNoSignSlowZone(): Boolean = suspendCoroutine { cont ->
+        val view = layoutInflater.inflate(R.layout.quest_maxspeed_no_sign_no_slow_zone_confirmation, null, false)
+        val input = view.findViewById<EditText>(R.id.maxSpeedInput)
+        input.setText("××")
+        input.inputType = EditorInfo.TYPE_NULL
 
-            AlertDialog.Builder(it)
-                .setTitle(R.string.quest_maxspeed_answer_noSign_confirmation_title)
-                .setView(view)
-                .setPositiveButton(R.string.quest_maxspeed_answer_noSign_confirmation_positive) { _, _ -> onConfirmed() }
-                .setNegativeButton(R.string.quest_generic_confirmation_no, null)
-                .show()
-        }
+        AlertDialog.Builder(activity!!)
+            .setTitle(R.string.quest_maxspeed_answer_noSign_confirmation_title)
+            .setView(view)
+            .setResumeButtons(cont,
+                R.string.quest_maxspeed_answer_noSign_confirmation_positive,
+                R.string.quest_generic_confirmation_no)
+            .show()
     }
 
-    private fun determineImplicitMaxspeedType() {
+    private suspend fun determineImplicitMaxspeedType(): String {
         val highwayTag = osmElement!!.tags["highway"]!!
-        if (ROADS_WITH_DEFINITE_SPEED_LIMIT.contains(highwayTag)) {
-            applyNoSignAnswer(highwayTag)
+        return if (ROADS_WITH_DEFINITE_SPEED_LIMIT.contains(highwayTag)) {
+            highwayTag
         } else {
             if (countryInfo.countryCode == "GB") {
-                determineLit(
-                    onYes = { applyNoSignAnswer("nsl_restricted") },
-                    onNo = {
-                        askIsDualCarriageway(
-                            onYes = { applyNoSignAnswer("nsl_dual") },
-                            onNo = { applyNoSignAnswer("nsl_single") })
-                    }
-                )
+                when {
+                    determineIsLit() -> "nsl_restricted"
+                    askIsDualCarriageway() -> "nsl_dual"
+                    else -> "nsl_single"
+                }
             } else {
-                askUrbanOrRural(
-                    onUrban = { applyNoSignAnswer("urban") },
-                    onRural = { applyNoSignAnswer("rural") })
+                if(askIsUrban()) "urban" else "rural"
             }
         }
     }
 
-    private fun askUrbanOrRural(onUrban: () -> Unit, onRural: () -> Unit) {
-        activity?.let {
-            AlertDialog.Builder(it)
-                .setTitle(R.string.quest_maxspeed_answer_noSign_info_urbanOrRural)
-                .setMessage(R.string.quest_maxspeed_answer_noSign_urbanOrRural_description)
-                .setPositiveButton(R.string.quest_maxspeed_answer_noSign_urbanOk) { _, _ -> onUrban() }
-                .setNegativeButton(R.string.quest_maxspeed_answer_noSign_ruralOk) { _, _ -> onRural() }
-                .show()
-        }
+    private suspend fun askIsUrban(): Boolean = suspendCoroutine { cont ->
+        AlertDialog.Builder(activity!!)
+            .setTitle(R.string.quest_maxspeed_answer_noSign_info_urbanOrRural)
+            .setMessage(R.string.quest_maxspeed_answer_noSign_urbanOrRural_description)
+            .setResumeButtons(cont,
+                R.string.quest_maxspeed_answer_noSign_urbanOk,
+                R.string.quest_maxspeed_answer_noSign_ruralOk)
+            .show()
     }
 
-    private fun determineLit(onYes: () -> Unit, onNo: () -> Unit) {
+    private suspend fun determineIsLit(): Boolean {
         val lit = osmElement!!.tags["lit"]
-        when (lit) {
-            "yes" -> onYes()
-            "no" -> onNo()
-            else -> askLit(onYes, onNo)
+        return when (lit) {
+            "yes" -> true
+            "no" -> false
+            else -> askIsLit()
         }
     }
 
-    private fun askLit(onYes: () -> Unit, onNo: () -> Unit) {
-        activity?.let {
-            AlertDialog.Builder(it)
-                .setMessage(R.string.quest_way_lit_road_title)
-                .setPositiveButton(R.string.quest_generic_hasFeature_yes) { _, _ -> onYes() }
-                .setNegativeButton(R.string.quest_generic_hasFeature_no) { _, _ -> onNo() }
-                .show()
-        }
+    private suspend fun askIsLit(): Boolean = suspendCoroutine { cont ->
+        AlertDialog.Builder(activity!!)
+            .setMessage(R.string.quest_way_lit_road_title)
+            .setResumeButtons(cont,
+                R.string.quest_generic_hasFeature_yes,
+                R.string.quest_generic_hasFeature_no)
+            .show()
     }
 
-    private fun askIsDualCarriageway(onYes: () -> Unit, onNo: () -> Unit) {
-        activity?.let {
-            AlertDialog.Builder(it)
-                .setMessage(R.string.quest_maxspeed_answer_noSign_singleOrDualCarriageway_description)
-                .setPositiveButton(R.string.quest_generic_hasFeature_yes) { _, _ -> onYes() }
-                .setNegativeButton(R.string.quest_generic_hasFeature_no) { _, _ -> onNo() }
-                .show()
-        }
+    private suspend fun askIsDualCarriageway(): Boolean = suspendCoroutine { cont ->
+        AlertDialog.Builder(activity!!)
+            .setMessage(R.string.quest_maxspeed_answer_noSign_singleOrDualCarriageway_description)
+            .setResumeButtons(cont,
+                R.string.quest_generic_hasFeature_yes,
+                R.string.quest_generic_hasFeature_no)
+            .show()
     }
 
     private fun applyNoSignAnswer(roadType: String) {
